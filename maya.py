@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Project Maya - set up and start GLM-5.3-Flash on your own GPU(s).
-CUDA: Linux; Windows (experimental). HIP: experimental gfx1100/gfx1201/gfx1151, Linux and Windows, text only.
+CUDA: Linux; Windows (experimental). HIP: experimental gfx1030/gfx1100/gfx1201/gfx1151, Linux and Windows, text only.
 
     ./maya.sh                 the first run sets everything up and starts the dashboard; later runs just start it
     ./maya.sh --setup         set up again (other GPUs, another context length, another model folder)
@@ -19,7 +19,7 @@ and Maya in the terminal as before; --yes: the setup in plain text.
 What the first run does (each step is skipped when it is already done):
 
   1. checks the PC: NVIDIA GPU(s) of compute capability 7.0+, driver, CUDA toolkit (nvcc), the C++ compiler (g++;
-     on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1100/gfx1201/gfx1151 and ROCm 7 instead
+     on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1030/gfx1100/gfx1201/gfx1151 and ROCm 7 instead
      (on Windows AMD's ROCm SDK wheels in .venv, offered when they are not there)
   2. asks: which GPUs (one, or several that split the layers), how much context, which model to download (Maya-S,
      Maya-S24, Maya-M or Maya-L)
@@ -75,7 +75,8 @@ VEXE = VBUILD / "bin" / ("strata-vision.exe" if WIN else "strata-vision")  # the
 VSTAMP = VBUILD / "MAYA-BUILD.json"
 MIN_CC = 70                                        # Volta (V100) and newer (the GLM path; see arch_setting)
 MAX_GPUS = 16                                      # the layer split's parts at most (glm_model.hpp, kMaxParts)
-HIP_ARCHS = ("gfx1100", "gfx1201", "gfx1151")        # Maya also supports Strix Halo (unified memory)
+HIP_ARCHS = ("gfx1030", "gfx1100", "gfx1201", "gfx1151")   # RDNA2 (RX 6800 / 6900), RDNA3, RDNA4; Maya also supports
+                                                          # Strix Halo / Gorgon Halo (unified memory)
 PY_PACKAGES = list(S.PY_PACKAGES)                  # (pillow: pictures in formats other than JPEG/PNG/BMP/GIF)
 CONTEXTS = [8192, 32768, 65536, 131072]
 DEFAULT_CONTEXT = 32768
@@ -318,9 +319,24 @@ def rocm_sdk() -> str | None:
     return None
 
 
+def rocm_version(root, bindir=None) -> tuple:
+    """(major, minor) of a ROCm root's hipcc, (0, 0) when nothing answers.  AMD's SDK for Windows 6.x has no
+    hipcc.exe - its hipcc is a .bat that needs perl - so its hipcc.bin.exe answers too, and a versioned install
+    folder (C:\\Program Files\\AMD\\ROCm\\6.2) says it in its own name."""
+    for folder in ([Path(bindir)] if bindir else []) + [Path(root) / "bin"]:
+        for name in ("hipcc.exe", "hipcc.bin.exe", "hipcc"):
+            cc = folder / name
+            if cc.exists():
+                return tool_version(str(cc))
+    digits = re.findall(r"\d+", Path(root).name)
+    return (int(digits[0]), int(digits[1])) if len(digits) >= 2 else (0, 0)
+
+
 def windows_rocm() -> tuple:
     """(ROCm's root, the folder of its DLLs) on Windows, or (None, None): ROCM_PATH, else TheRock's wheels, else AMD's
-    HIP SDK for Windows (HIP_PATH, which its installer sets, else the newest in C:\\Program Files\\AMD\\ROCm)."""
+    HIP SDK for Windows (HIP_PATH, which its installer sets, else the newest in C:\\Program Files\\AMD\\ROCm). Of those
+    with a compiler, a ROCm 7 or newer wins: a gaming PC usually has AMD's HIP SDK 6.x, which Maya does not build with
+    (check_hip_pc offers the 7 wheels for it), and the older root is only returned so that it can say which one."""
     if os.environ.get("ROCM_PATH"):
         root = Path(os.environ["ROCM_PATH"]).resolve()
         return root, root / "bin"
@@ -337,10 +353,13 @@ def windows_rocm() -> tuple:
             return Path(root), Path(path("--bin") or Path(root) / "bin")
     base = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "AMD" / "ROCm"
     sdks = sorted(base.glob("[0-9]*"), key=lambda p: [int(x) for x in re.findall(r"\d+", p.name)], reverse=True)
-    for root in ([Path(os.environ["HIP_PATH"])] if os.environ.get("HIP_PATH") else []) + sdks:
-        if hip_clang(root) is not None:
-            return root.resolve(), root.resolve() / "bin"
-    return None, None
+    found = [root.resolve() for root in
+             ([Path(os.environ["HIP_PATH"])] if os.environ.get("HIP_PATH") else []) + sdks
+             if hip_clang(root) is not None]
+    for root in found:
+        if rocm_version(root) >= (7, 0):
+            return root, root / "bin"
+    return (found[0], found[0] / "bin") if found else (None, None)
 
 
 def rocm_devices_missing(archs) -> list:
@@ -379,13 +398,15 @@ def rocm_pip(archs) -> list:
 
 def install_rocm(a, chosen) -> None:
     """Windows: AMD's ROCm SDK with the kernels for these GPUs into Maya's .venv (asked first; nothing goes outside
-    this folder), else the command."""
+    this folder), else the command.  An AMD HIP SDK already installed here - 6.x on most gaming PCs - is left as it
+    is: Maya compiles with the .venv's ROCm, unless ROCM_PATH points at the older one."""
     archs = sorted({g["arch"] for g in chosen})
     cmd = rocm_pip(archs)
     what = f"AMD's ROCm SDK for Windows with the kernels for {', '.join(archs)}"
     if getattr(a, "check", False) or sys.prefix == sys.base_prefix:
         fail(f"{what} is not installed", f"install it into Maya's Python environment: {cmdline(cmd)}"
-             f" - then run {ME} again (or set ROCM_PATH / ROCM_VENV to a ROCm 7 that has one)")
+             f" - then run {ME} again (or set ROCM_PATH / ROCM_VENV to a ROCm 7 that has one; an AMD HIP SDK 6.x "
+             "installed here is left as it is, but ROCM_PATH must not point at it)")
     if ask(f"Install {what} ({THEROCK_VERSION}) into .venv now (pip, from repo.amd.com)?",
            ["y", "n"], "y", getattr(a, "yes", False)) != "y":
         fail("Maya's HIP engine is compiled with AMD's ROCm SDK", f"install it with: {cmdline(cmd)}")
@@ -410,8 +431,8 @@ def check_hip_pc(a, installed=False) -> dict:
     for g in found:
         say(f"    {gpu_label(g)} - " + ("can be used" if g in usable else "not supported by Maya's HIP build"))
     if not usable:
-        fail("no supported AMD GPU found", "this port targets RX 7900 XT / XTX (gfx1100), RX 9070 / AI PRO R9700 "
-             "(gfx1201), and Strix Halo / Gorgon Halo, Radeon 8050S / 8060S / 8065S (gfx1151)")
+        fail("no supported AMD GPU found", "this port targets RX 6800 / 6900 (gfx1030), RX 7900 XT / XTX (gfx1100), "
+             "RX 9070 / AI PRO R9700 (gfx1201), and Strix Halo / Gorgon Halo, Radeon 8050S / 8060S / 8065S (gfx1151)")
     if WIN and hipinfo and all(g.get("source") == "registry" for g in found):
         warn(f"ROCm's hipInfo sees no AMD GPU (the list above is Windows'): the engine cannot start until it does - "
              f"update AMD's driver (AMD Software: Adrenalin Edition, https://www.amd.com/en/support), restart, and "
@@ -443,10 +464,16 @@ def check_hip_pc(a, installed=False) -> dict:
             fail(f"GPU {a.gpu} is not a supported AMD card")
         chosen = [one]
     if WIN:
-        # no ROCm SDK, or Maya's without the library kernels (rocm-sdk-device-<arch>) for a chosen GPU: offered once,
-        # then checked again with ROCm there (its hipInfo numbers the GPUs as HIP does)
+        # no ROCm SDK, Maya's without the library kernels (rocm-sdk-device-<arch>) for a chosen GPU, or only an AMD
+        # HIP SDK 6.x here (Maya compiles with ROCm 7): offered once, then checked again with ROCm 7 there (its hipInfo
+        # numbers the GPUs as HIP does). The .venv's ROCm leaves an SDK installed here as it is.
+        have = rocm_version(root, bindir) if root is not None else (0, 0)
+        too_old = (0, 0) < have < (7, 0)
         missing = sorted({g["arch"] for g in chosen}) if root is None else rocm_devices_missing(g["arch"] for g in chosen)
-        if missing and not installed and (root is None or not getattr(a, "check", False)):   # (--check: says so below)
+        if (missing or too_old) and not installed and (root is None or not getattr(a, "check", False)):  # (--check: below)
+            if too_old and not missing:
+                say(f"  {root} is ROCm {have[0]}.{have[1]}: Maya compiles with ROCm 7, and "
+                    "that one goes into Maya's .venv (the SDK installed here is left as it is)")
             install_rocm(a, chosen)
             return check_hip_pc(a, installed=True)
         if root is None:
@@ -458,9 +485,11 @@ def check_hip_pc(a, installed=False) -> dict:
             fail(f"ROCm's HIP compiler and hipBLAS are not in {root}",
                  f"install AMD's ROCm SDK into Maya's .venv: {cmdline(rocm_pip(g['arch'] for g in chosen))} - or set "
                  "ROCM_PATH to the root of a ROCm 7 for Windows")
-        hipcc = next((p for p in (bindir / "hipcc.exe", root / "bin" / "hipcc.exe") if p.exists()), None)
-        if hipcc is not None and tool_version(str(hipcc)) < (7, 0):
-            fail("Maya's HIP port requires ROCm 7 or newer")
+        if (0, 0) < have < (7, 0):
+            fail(f"Maya's HIP port requires ROCm 7 or newer, and {root} is {have[0]}.{have[1]}",
+                 f"install a ROCm 7 into Maya's Python environment: {cmdline(rocm_pip(g['arch'] for g in chosen))} - "
+                 "AMD's SDK installed here is not touched, and Maya then compiles with the .venv's ROCm (or set "
+                 "ROCM_PATH to the root of a ROCm 7 for Windows)")
     else:
         root = Path(os.environ.get("ROCM_PATH") or "/opt/rocm")
         if not os.environ.get("ROCM_PATH") and not root.exists():
@@ -497,7 +526,11 @@ def check_hip_pc(a, installed=False) -> dict:
     elif any(hip_unified_memory(g) for g in chosen):
         ok("APU / unified memory: the engine sizes the GPU expert pool from available system RAM")
     select_build_backend("hip")
-    return {"backend": "hip", "gpus": chosen, "archs": list(HIP_ARCHS), "rocm": str(root),
+    # compile the engine for the cards this PC picked, not for every architecture Maya knows: an RX 6800 does not need
+    # RDNA3/4 code objects, and a minute of compiling per one. A --setup after a card is swapped rebuilds (build_step
+    # compares these archs), and a split of two different cards compiles both.
+    chosen_archs = [x for x in HIP_ARCHS if x in {g["arch"] for g in chosen}]
+    return {"backend": "hip", "gpus": chosen, "archs": chosen_archs, "rocm": str(root),
             **({"rocm_bin": str(bindir)} if WIN else {})}
 
 
@@ -996,6 +1029,47 @@ def toolchain_for(archs, nvcc_given: str | None, hc_given: str | None) -> tuple:
     return (nvccs[0] if nvccs else nvcc_given), hc_given
 
 
+PROBE_HIP = """#include <cmath>
+__device__ float d(float a, float b) { return rsqrtf(a) + sinf(b) + (float) std::isless(a, b); }
+int main() { return (int) std::cos(0.0) - 1 + (int) std::isless(1.0, 2.0); }
+"""
+
+
+def hip_cmath_flags(clang, arch: str, vcvars) -> list:
+    """What ROCm's clang needs here to compile a .hip file at all, or [] when it compiles as it is.
+
+    Visual Studio's <cmath> (2022 17.12 and newer, 2026 too) declares isless() and its five friends as constexpr
+    functions when clang reads it.  clang's HIP mode reads a constexpr function as host+device - and a host+device
+    function cannot be overloaded - so ROCm's own __device__ overloads of them are refused, in every file, before a
+    line of Maya compiles ("__device__ function 'isless' cannot overload __host__ __device__ function").  Asking clang
+    not to do that is what nvcc has always done, and an engine that builds for CUDA both ways needs no host+device
+    function it did not annotate.  A two-line file says whether this Visual Studio needs the ask (and a ROCm or a
+    Visual Studio that settles this needs nothing again)."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as t:
+        src = Path(t) / "probe.hip"
+        src.write_text(PROBE_HIP, encoding="utf-8")
+        base = [str(clang), f"--offload-arch={arch}", "--target=x86_64-pc-windows-msvc", "-std=c++20",
+                "-x", "hip", "-c", str(src), "-o", str(Path(t) / "probe.obj")]
+        for extra in ([], ["-Xclang", "-fno-cuda-host-device-constexpr"]):
+            cmd = base[:4] + extra + base[4:]
+            if vcvars:                                  # (the standard library is on INCLUDE only inside it)
+                bat = Path(t) / "probe.bat"
+                bat.write_text(f'@echo off\r\ncall "{vcvars}" >nul\r\n{cmdline(cmd)}\r\n', encoding="utf-8")
+                cmd = ["cmd", "/c", str(bat)]
+            try:
+                rc = subprocess.run(cmd, capture_output=True, text=True).returncode
+            except OSError:                             # (no cmd or no clang to ask: the build itself will say why)
+                return []
+            if rc == 0:
+                if extra:
+                    ok("this Visual Studio's <cmath> and ROCm's math wrappers do not go together: clang is asked not "
+                       "to read a constexpr function as host+device (a two-line test file said so)")
+                return extra
+    return []
+
+
 def compile_engine_hip(pc: dict, llama: Path, src: str, soft=False) -> dict | None:
     root = Path(pc["rocm"])
     cmake = pick_cmake()
@@ -1023,8 +1097,12 @@ def compile_engine_hip(pc: dict, llama: Path, src: str, soft=False) -> dict | No
                  f"-DCMAKE_C_COMPILER={(clang.parent / 'clang.exe').as_posix()}",
                  f"-DCMAKE_CXX_COMPILER={clang.as_posix()}", f"-DCMAKE_HIP_COMPILER_ROCM_ROOT={root.as_posix()}",
                  "-DSTRATA_PORTABLE=ON"]
-        if " " not in str(root) + str(bitcode):        # (with a space in them, clang takes HIP_PATH and the above)
-            conf.append(f"-DCMAKE_HIP_FLAGS=--rocm-path={root.as_posix()} --rocm-device-lib-path={bitcode.as_posix()}")
+        vc = S.find_vcvars(cuda=False)
+        hflags = [] if " " in str(root) + str(bitcode) else [   # (with a space in them, clang takes HIP_PATH and the above)
+            f"--rocm-path={root.as_posix()}", f"--rocm-device-lib-path={bitcode.as_posix()}"]
+        hflags += hip_cmath_flags(clang, pc["archs"][0], vc)
+        if hflags:
+            conf.append(f"-DCMAKE_HIP_FLAGS={' '.join(hflags)}")
     conf += ["-S", str(ROOT), "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release",
              "-DSTRATA_ENABLE_HIP=ON", "-DSTRATA_ENABLE_CUDA=OFF", "-DSTRATA_PREFILL_MMQ=ON",
              "-DSTRATA_NATIVE_EXPERTS=ON", "-DSTRATA_BUILD_TESTS=OFF",
@@ -1034,7 +1112,7 @@ def compile_engine_hip(pc: dict, llama: Path, src: str, soft=False) -> dict | No
     jobs = max(1, min(4, (os.cpu_count() or 4) // 2))
     say("  Compiling Maya for AMD " + ", ".join(pc["archs"]) + " ...")
     if cmake_steps(conf, [cmake, "--build", str(BUILD), "--target", "strata", "-j", str(jobs)], env,
-                   "build-maya-hip.bat", vcvars=S.find_vcvars(cuda=False) if WIN else None):
+                   "build-maya-hip.bat", vcvars=vc if WIN else None):
         if soft:
             warn("HIP rebuild failed; starting the previous engine")
             return None
@@ -2201,7 +2279,7 @@ def maya_version() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1100/gfx1201/gfx1151 on Linux and Windows)")
+    ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1030/gfx1100/gfx1201/gfx1151 on Linux and Windows)")
     ap.add_argument("--setup", action="store_true", help="set up again instead of starting the installed model")
     ap.add_argument("--check", action="store_true", help="only check this PC and exit")
     ap.add_argument("--no-start", action="store_true", help="set up, but do not start the dashboard")

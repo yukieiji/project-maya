@@ -4,6 +4,36 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.31.1 - 2026-10-10
+
+Maya's HIP backend on RDNA2 (RX 6800 / 6900), and on Windows it takes a ROCm 7 when one sits next to an AMD HIP SDK 6.x.
+
+- **AMD RDNA2, `gfx1030` (experimental)** ([#311](https://github.com/mw00/project-maya/issues/311)): setup, compile
+  and run Maya on an RX 6800 / 6900, Linux and Windows, one GPU, text only
+  ([docs/AMD_RDNA2.md](docs/AMD_RDNA2.md)).
+  - **The engine:** RDNA2 is the same wave32 family with the same 64 KiB of LDS a workgroup as the RDNA3 cards Maya is
+    measured on, so no kernel needed a new path. The quantized dot product runs `v_dot4_i32_i8` where RDNA3 has
+    `sudot4` (the same signed contract as CUDA's `__dp4a`, checked against a CPU reference by `hip_intrinsics`), and
+    the decode experts stay the original HIP kernels.
+  - **No FP16 prompt attention on RDNA2:** ROCm 7's rocWMMA lists gfx9xx, gfx11xx and gfx12xx and stops with
+    "Unsupported architecture" on `gfx1030`, so `mla_attn_f16q` is not built for this card (CMake says so at configure
+    time, `mla_f16q_supported()` at run time) and its prompt attention runs the F32 kernel.
+  - **A newer Visual Studio compiles again:** 2022 17.12 and 2026 declare `isless()` and its five friends in `<cmath>`
+    as `constexpr`, which clang's HIP mode reads as host+device - and a host+device function cannot be overloaded, so
+    ROCm's own `__device__` overloads stopped every `.hip` file. Setup compiles a two-line `.hip` file first and adds
+    `-Xclang -fno-cuda-host-device-constexpr` when that is what it finds (docs/AMD_MAYA.md).
+  - **Setup:** accepts `gfx1030`, reads a Navi 21 adapter from Windows' display adapters before the ROCm SDK is in,
+    and compiles the engine for the architectures of the GPUs it picked - an RX 6800 gets `gfx1030` alone instead of
+    every architecture Maya knows, and a split of two different cards gets both.
+  - **ROCm 7 next to a 6.x SDK:** Maya compiles with ROCm 7 or newer and nothing else. Windows now takes a 7 when one
+    is installed; when only AMD's HIP SDK 6.x is here it says so and offers the ROCm 7 wheels in `.venv`, leaving the
+    SDK installed on the system as it is.
+  - **On a card:** the fourteen HIP checks of the RDNA2 page passed on a Radeon PRO W6800 (30 GB) with AMD's ROCm
+    7.14.1 wheels on Windows. The model-level numbers are still out - `--bench` with `--report` sends them. An
+    RX 6600 / 6700 (`gfx1032` / `gfx1034`) builds with CMake but the installer does not offer it, and a `gfx1036` iGPU
+    stays refused.
+
+  NVIDIA and the `gfx1100` / `gfx1201` / `gfx1151` cards are unchanged.
 ## v1.0.31 - 2026-10-10
 
 The expert prefetch can now pay on a RAM-bound split: three settings choose when its copy starts, how many GPU blocks it

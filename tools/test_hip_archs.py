@@ -34,8 +34,18 @@ class HipArchitectureTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("compiler=gfx1100:xnack-;gfx1201;gfx1151;runtime=gfx1100,gfx1201,gfx1151", r.stdout)
 
+    def test_rdna2_builds_unvalidated(self):
+        # RDNA2 is the same wave32 / 64 KiB LDS family with an older dot4 instruction: it builds, and CMake says it
+        # is not validated on a real card yet (docs/AMD_RDNA2.md).
+        for value, runtime in (("gfx1030", "gfx1030"), ("gfx1032", "gfx1032"), ("gfx1100;gfx1030", "gfx1100,gfx1030")):
+            with self.subTest(value=value):
+                r = self.probe(value)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(f"runtime={runtime}", r.stdout)
+                self.assertIn("not validated", r.stderr)
+
     def test_rejects_unsupported_and_prefix_matches(self):
-        for value in ("gfx12010", "gfx90a", "gfx1100;gfx1036"):
+        for value in ("gfx12010", "gfx90a", "gfx1100;gfx1036", "gfx1035"):
             with self.subTest(value=value):
                 self.assertNotEqual(self.probe(value).returncode, 0)
 

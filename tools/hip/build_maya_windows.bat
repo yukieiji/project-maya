@@ -26,6 +26,8 @@ set "HIP_PATH=%ROCM%"
 set "ROCM_PATH=%ROCM%"
 set "PATH=%ROCM%\bin;%ROCM%\lib\llvm\bin;%PATH%"
 if not exist "%BUILD_DIR%\build.ninja" (
+  rem A Visual Studio newer than 2022 17.12 needs one more on the HIP flags, or no .hip file compiles:
+  rem   "-DCMAKE_HIP_FLAGS=... -Xclang -fno-cuda-host-device-constexpr"   (docs\AMD_MAYA.md says why; maya.py asks for it)
   cmake -G Ninja -S "%SRC%" -B "%BUILD_DIR%" -DCMAKE_BUILD_TYPE=Release ^
     -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_BUILD_TESTS=%TESTS% -DSTRATA_PREFILL_MMQ=ON ^
     -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_PORTABLE=ON "-DCMAKE_HIP_ARCHITECTURES=%STRATA_HIP_ARCHS%" ^

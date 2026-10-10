@@ -5,6 +5,7 @@ architecture:
 
 | Architecture | IQ2_XXS gate/up (`gate_up<16>`) | IQ2_S down (`down<22>`) | IQ3_XXS down (`down<18>`) |
 | --- | --- | --- | --- |
+| gfx1030 | Original (legacy) | Original (legacy) | Original (legacy) |
 | gfx1100 | Optimized | Optimized | Optimized |
 | gfx1151 | Optimized | Optimized | Original (legacy) |
 | gfx1201 | Original (legacy) | Original (legacy) | Original (legacy) |
@@ -13,6 +14,10 @@ gfx1201 is unchanged and untuned by this expert-kernel work. Other shapes,
 other quant types, other architectures and CUDA keep the original dispatch. Set
 `STRATA_HIP_EXPERTS_LEGACY=1` before starting a process to force original HIP
 expert kernels for an end-to-end comparison.
+
+gfx1030 (RDNA2) is unchanged by it too: the packed-sign kernels are dispatched
+for gfx1100 and gfx1151, and RDNA2 has `v_dot4_i32_i8` where RDNA3 has `sudot4`
+([AMD_RDNA2.md](AMD_RDNA2.md)).
 
 The main change is packed sign expansion: a multiply spreads four sign bits
 into the high bit of four bytes, then masks and shifts produce the XOR masks

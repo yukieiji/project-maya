@@ -1,8 +1,9 @@
-# Experimental Maya on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo
+# Experimental Maya on RX 6800 / 6900, RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
-engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two discrete cards that split the
-layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer.
+engine on `gfx1030` (RDNA2), `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two discrete cards that split the
+layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer. RDNA2 has its own page:
+[AMD_RDNA2.md](AMD_RDNA2.md).
 Windows: see [Windows](#windows).
 
 Use a system ROCm 7 installation with its HIP compiler and hipBLAS, Python
@@ -21,8 +22,9 @@ The first setup downloads about 96.5 GB of weights and verifies the SHA-256
 hash of each shard. `--gguf-dir DIR` uses existing files instead. GPU numbers
 are the kernel KFD topology order shown by `--check`; on the test machine the
 7900 XT is GPU 0, an R9700 is GPU 1, and the integrated GPU is GPU 2. This
-installer accepts `gfx1100`, `gfx1201` and `gfx1151` and compiles one binary for
-`gfx1100;gfx1201;gfx1151`.
+installer accepts `gfx1030`, `gfx1100`, `gfx1201` and `gfx1151` and compiles the
+architectures of the GPUs it picked - one card one architecture, a split of two
+different cards both of them.
 Configs are named `maya-<quant>-hip.json` and
 select the AMD device through `HIP_VISIBLE_DEVICES`.
 
@@ -120,6 +122,14 @@ hipInfo, Windows' AMD display adapters in the registry's order.
 
 The build copies the ROCm SDK's HIP runtime (`amdhip64_7.dll`, `amd_comgr*.dll`, `rocm_kpack.dll`) next to
 `build-hip\strata.exe`: Windows would otherwise load the driver's own from System32 before the SDK's.
+
+**A newer Visual Studio and ROCm's math wrappers.** Visual Studio 2022 17.12 and 2026 declare `isless()` and its five
+friends in `<cmath>` as `constexpr` functions when clang reads them, and clang's HIP mode reads a `constexpr` function
+as host+device - one that cannot be overloaded, so ROCm's own `__device__` overloads are refused and no `.hip` file
+compiles (`__device__ function 'isless' cannot overload __host__ __device__ function`). Setup compiles a two-line
+`.hip` file before configuring and, when it says so, builds with `-Xclang -fno-cuda-host-device-constexpr`: a function
+is host unless it says otherwise, which is what nvcc has always done and what an engine that builds for CUDA both ways
+needs. Building by hand with `tools\hip\build_maya_windows.bat`, add that flag to its `CMAKE_HIP_FLAGS`.
 
 **Memory on a Windows APU.** Windows gives the APU's GPU a fixed carve-out and does not count it as RAM: the 192 GB PC
 below, with 160 GB of Variable Graphics Memory, shows 32 GB of RAM, and HIP reports 171.9 GB (the carve-out and three
@@ -223,7 +233,9 @@ covers all 65,536 pairs of byte values with varying neighboring lanes and
 permutation selectors, against per-byte CPU references. The runtime rejects
 the uncompiled `gfx1036` integrated GPU with the actual device and compiled
 architecture list in its message. See [R9700 build details](AMD_RDNA4.md) and
-[the shared AMD backport audit](AMD_UPSTREAM.md).
+[the shared AMD backport audit](AMD_UPSTREAM.md). RDNA2 (`gfx1030`) is installed and compiled the same way: its
+fourteen checks passed on a Radeon PRO W6800 with ROCm 7.14.1 on Windows, its model-level numbers are not in yet:
+[AMD_RDNA2.md](AMD_RDNA2.md).
 
 ```sh
 python3 tools/test_maya_hip.py

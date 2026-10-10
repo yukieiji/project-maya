@@ -436,13 +436,18 @@ def pip_install(packages, what):
     ok(f"{what} installed")
 
 
-AMD_NAMES = {"gfx1100": "AMD Radeon RX 7900 series (gfx1100)",
+AMD_NAMES = {"gfx1030": "AMD Radeon RX 6800 / 6900 series (gfx1030)",
+             "gfx1100": "AMD Radeon RX 7900 series (gfx1100)",
              "gfx1201": "AMD Radeon RX 9070 / AI PRO R9700 (gfx1201)"}   # when sysfs has no product name
-# Windows without ROCm's hipInfo yet: the architecture from the adapter's PCI device ID (Navi 31, Navi 48, the
-# Strix Halo / Gorgon Halo APU), else from its name ("AMD Radeon(TM) 8060S Graphics", 8050S, 8065S, ...)
-AMD_DEVICE_ARCHS = {"744c": "gfx1100", "7550": "gfx1201", "7551": "gfx1201", "1586": "gfx1151"}
+# Windows without ROCm's hipInfo yet: the architecture from the adapter's PCI device ID (Navi 21, Navi 31, Navi 48, the
+# Strix Halo / Gorgon Halo APU), else from its name ("AMD Radeon(TM) 8060S Graphics", 8050S, 8065S, ...).  Only IDs
+# read off a real adapter go in the table - an RDNA2 adapter whose ID is not listed keeps reading "unknown" by ID and
+# is caught by its name, and hipInfo takes the architecture off the card itself once the ROCm SDK is in.
+AMD_DEVICE_ARCHS = {"73a3": "gfx1030",       # Radeon PRO W6800 (Navi 21)
+                    "744c": "gfx1100", "7550": "gfx1201", "7551": "gfx1201", "1586": "gfx1151"}
 AMD_NAME_ARCHS = ((r"Radeon(?:\s*\(TM\))?\s+80[4-6]\dS", "gfx1151"), (r"RX\s*7900", "gfx1100"),
-                  (r"RX\s*9070|R9700", "gfx1201"))
+                  (r"RX\s*9070|R9700", "gfx1201"),
+                  (r"RX\s*6(?:800|900|950)(?:\s*XT)?(?=\s|$)|PRO\s+W6800", "gfx1030"))
 
 
 def parse_hipinfo(text: str) -> list:

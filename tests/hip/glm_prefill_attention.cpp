@@ -114,8 +114,11 @@ int main() {
     std::printf("GLM prefill attention: max absolute error %.3e (tolerance 5e-5)\n", worst);
     if (worst > 5e-5) return 5;
 
-    // The rocWMMA kernel (FP16 Q) against the F32 kernel on the same FP16-rounded Q: random data, many cells
-    {
+    // The rocWMMA kernel (FP16 Q) against the F32 kernel on the same FP16-rounded Q: random data, many cells.  ROCm 7
+    // has no rocWMMA for RDNA2, so that build has no FP16 kernel to compare (mla_attn_f16q says so and does nothing).
+    if (!strata::kernels::glmb::mla_f16q_supported())
+        std::puts("GLM prefill WMMA attention: skipped (this ROCm's rocWMMA has no RDNA2)");
+    else {
         constexpr int T2 = 48, H2 = 32, rows2 = 2048, stride2 = 700;
         std::vector<float> q2((size_t) T2 * H2 * KV), lat2((size_t) rows2 * KV), a(q2.size()), b(q2.size());
         std::vector<uint16_t> lat16(lat2.size()), q16(q2.size());

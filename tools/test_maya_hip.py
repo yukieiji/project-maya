@@ -170,6 +170,32 @@ class HipSetupTests(unittest.TestCase):
             "STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
         self.assertFalse(maya.hip_unified_memory(self.gpus[1]))
 
+    def test_rdna2_card_is_accepted_and_only_its_own_arch_is_built(self):
+        self.gpus.append({"index": 3, "arch": "gfx1030", "vendor": "amd", "name": "RX 6800 XT", "vram_gb": 16})
+        self.a.gpu = 3
+        pc = maya.check_pc(self.a)
+        self.assertEqual(pc["gpus"], [self.gpus[3]])
+        self.assertEqual(pc["archs"], ["gfx1030"])          # an RDNA2 card needs no RDNA3/4 code objects
+        self.assertFalse(maya.hip_unified_memory(pc["gpus"][0]))
+
+    def test_a_split_of_two_architectures_compiles_both(self):
+        self.gpus.append({"index": 3, "arch": "gfx1030", "vendor": "amd", "name": "RX 6800 XT", "vram_gb": 16})
+        self.a.gpu = None
+        self.a.gpus = "0,3"
+        pc = maya.check_pc(self.a)
+        self.assertEqual([g["index"] for g in pc["gpus"]], [0, 3])          # the 20 GB card takes the bigger half
+        self.assertEqual(pc["archs"], ["gfx1030", "gfx1100"])
+
+    def test_rdna2_config_has_no_tuning_table_and_no_bigger_sub_batch(self):
+        self.gpus.append({"index": 3, "arch": "gfx1030", "vendor": "amd", "name": "RX 6800 XT", "vram_gb": 16})
+        self.a.gpu = 3
+        p = maya.write_config(self.a, maya.check_pc(self.a), {}, self.root / "pack", "test", 8192,
+                              self.root / "data", None)
+        env = json.loads(p.read_text())["env"]
+        self.assertNotIn("STRATA_HIPBLASLT_TUNING", env)    # no gfx1030 table: the dense projections stay on hipBLAS
+        self.assertNotIn("STRATA_GLM_PREFILL_SUB", env)     # 16 GB keeps the engine's own sub-batches
+        self.assertEqual(env["STRATA_GLM_SPLIT"], "0")
+
     def test_hip_build_enables_mmq_and_never_cuda(self):
         pc = maya.check_pc(self.a)
         maya.BUILD.mkdir()
@@ -180,7 +206,7 @@ class HipSetupTests(unittest.TestCase):
         self.assertIn("-DSTRATA_ENABLE_HIP=ON", conf)
         self.assertIn("-DSTRATA_ENABLE_CUDA=OFF", conf)
         self.assertIn("-DSTRATA_PREFILL_MMQ=ON", conf)
-        self.assertIn("-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151", conf)
+        self.assertIn("-DCMAKE_HIP_ARCHITECTURES=gfx1100", conf)      # the chosen card only, not every arch Maya knows
         self.assertEqual(env["ROCM_PATH"], str(self.rocm))
         self.assertEqual(meta["backend"], "hip")
 
@@ -470,6 +496,15 @@ class WindowsDetectionTests(unittest.TestCase):
                            {"DriverDesc": "AMD Radeon RX 9070 XT", "MatchingDeviceId": "pci\\ven_1002&dev_7550"},
                            {"DriverDesc": "AMD Radeon(TM) Graphics", "MatchingDeviceId": "pci\\ven_1002&dev_164e"}])
         self.assertEqual([g["arch"] for g in maya.S.parse_display_adapters(rows)], ["gfx1151", "gfx1201", "unknown"])
+        rdna2 = json.dumps([{"DriverDesc": "AMD Radeon PRO W6800", "MatchingDeviceId": "pci\\ven_1002&dev_73a3"},
+                            {"DriverDesc": "AMD Radeon RX 6950 XT", "MatchingDeviceId": "pci\\ven_1002&dev_9999"},
+                            {"DriverDesc": "AMD Radeon RX 6900 XT", "MatchingDeviceId": "pci\\ven_1002&dev_9999"},
+                            {"DriverDesc": "AMD Radeon RX 6800M", "MatchingDeviceId": "pci\\ven_1002&dev_9999"},
+                            {"DriverDesc": "AMD Radeon RX 6600 XT", "MatchingDeviceId": "pci\\ven_1002&dev_9999"}])
+        # the PRO W6800 by its device ID (read off a real adapter), the desktop RX 6900 / 6950 XT by their name; the
+        # laptop RX 6800M and the RX 6600 XT (gfx1034) stay unknown - hipInfo says the rest once the SDK is in
+        self.assertEqual([g["arch"] for g in maya.S.parse_display_adapters(rdna2)],
+                         ["gfx1030", "gfx1030", "gfx1030", "unknown", "unknown"])
         self.assertEqual(maya.S.parse_display_adapters(""), [])
         self.assertEqual(maya.S.parse_display_adapters("not json"), [])
 
@@ -655,7 +690,7 @@ class WindowsHipSetupTests(unittest.TestCase):
                      f"-DCMAKE_HIP_COMPILER={root}/lib/llvm/bin/clang++.exe",
                      f"-DCMAKE_HIP_COMPILER_ROCM_ROOT={root}",
                      "-DSTRATA_ENABLE_HIP=ON", "-DSTRATA_ENABLE_CUDA=OFF", "-DSTRATA_PREFILL_MMQ=ON",
-                     "-DSTRATA_PORTABLE=ON", "-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151"):
+                     "-DSTRATA_PORTABLE=ON", "-DCMAKE_HIP_ARCHITECTURES=gfx1151"):
             self.assertIn(want, conf)
         if " " not in root:
             self.assertIn(f"-DCMAKE_HIP_FLAGS=--rocm-path={root} --rocm-device-lib-path={root}/lib/llvm/amdgcn/bitcode",
@@ -665,9 +700,22 @@ class WindowsHipSetupTests(unittest.TestCase):
         self.assertTrue(bat.endswith(".bat"))
         self.assertEqual(meta["lib_dirs"], [str(self.rocm.resolve() / "bin")])
 
-    def hip_sdk(self):
+    def test_a_visual_studio_whose_cmath_rocm_cannot_read(self):
+        """Visual Studio 2022 17.12 / 2026: <cmath> declares isless() as constexpr, clang's HIP mode reads that as
+        host+device, and ROCm's __device__ overload of it is refused - the two-line probe says so and clang is asked
+        not to do that.  A clang that compiles the file as it is asks for nothing, and one that compiles it neither
+        way gets the plain build, whose error is the one worth reading."""
+        flags = ["-Xclang", "-fno-cuda-host-device-constexpr"]
+        for answers, want in (([1, 0], flags), ([0], []), ([1, 1], [])):
+            it = iter(answers)
+            with patch.object(maya.subprocess, "run",
+                              side_effect=lambda *c, **k: SimpleNamespace(returncode=next(it))) as run:
+                self.assertEqual(maya.hip_cmath_flags("clang++.exe", "gfx1030", Path("C:/VS/vcvars64.bat")), want)
+                self.assertEqual(run.call_count, len(answers))
+
+    def hip_sdk(self, version="7.2"):
         """AMD's HIP SDK for Windows' layout: clang, hipInfo and the DLLs in bin, the device libraries in amdgcn."""
-        sdk = self.root / "Program Files/AMD/ROCm/7.2"
+        sdk = self.root / "Program Files/AMD/ROCm" / version
         for f in ("bin/clang++.exe", "bin/clang.exe", "bin/hipcc.exe", "bin/hipblas.dll", "lib/hipblas.lib"):
             (sdk / f).parent.mkdir(parents=True, exist_ok=True)
             (sdk / f).touch()
@@ -687,6 +735,28 @@ class WindowsHipSetupTests(unittest.TestCase):
             with patch.dict(os.environ, {**clean, "ProgramFiles": str(self.root / "none")}, clear=True):
                 self.assertEqual(maya.windows_rocm(), (None, None))
         self.assertEqual(maya.hip_clang(sdk), sdk / "bin/clang++.exe")
+
+    def test_a_rocm_7_wins_over_an_installed_hip_sdk_6(self):
+        sdk7, sdk6 = self.hip_sdk(), self.hip_sdk("6.4")
+        clean = {k: v for k, v in os.environ.items() if k not in ("ROCM_PATH", "ROCM_VENV", "HIP_PATH")}
+        with patch.object(maya, "rocm_sdk", return_value=None), \
+                patch.object(maya, "tool_version", side_effect=lambda exe: (6, 4) if str(sdk6) in exe else (7, 2)):
+            with patch.dict(os.environ, {**clean, "ProgramFiles": str(self.root / "Program Files")}, clear=True):
+                self.assertEqual(maya.windows_rocm(), (sdk7.resolve(), sdk7.resolve() / "bin"))
+            with patch.dict(os.environ, {**clean, "ProgramFiles": str(self.root / "none"),
+                                         "HIP_PATH": str(sdk6)}, clear=True):
+                # only the 6.x here: it comes back so that check_hip_pc can name it, and offers the 7 wheels for it
+                self.assertEqual(maya.windows_rocm(), (sdk6.resolve(), sdk6.resolve() / "bin"))
+
+    def test_only_a_hip_sdk_6_offers_the_rocm_7_wheels(self):
+        sdk6 = self.hip_sdk("6.4")
+        found = iter([(sdk6, sdk6 / "bin"), (self.rocm, self.rocm / "bin"), (self.rocm, self.rocm / "bin")])
+        with patch.object(maya, "windows_rocm", side_effect=lambda: next(found)), \
+                patch.object(maya, "tool_version", side_effect=lambda exe: (6, 4) if "6.4" in exe else (7, 14)), \
+                patch.object(maya, "run") as pip, patch.object(sys, "base_prefix", "/somewhere/else"):
+            pc = maya.check_pc(self.a)
+        self.assertIn(f"rocm[libraries,devel,device-gfx1151]=={maya.THEROCK_VERSION}", pip.call_args.args[0])
+        self.assertEqual(pc["rocm"], str(self.rocm))          # and it then compiles with the .venv's ROCm 7
 
     def test_hip_sdk_build_in_a_folder_with_a_space(self):
         sdk = self.hip_sdk()

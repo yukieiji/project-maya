@@ -16,8 +16,8 @@ Maya grew out of [Strata](https://github.com/Niko1221/Strata) (MIT): its engine 
 for GLM-5.3-Flash (the expert tiers across VRAM, RAM and SSD, the two-GPU split, MTP decoding), and its server and
 dashboard started from Strata's and were reworked for Maya (a new dashboard, images on demand, the thinking budget).
 
-**AMD (experimental):** Linux and Windows on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo (Radeon 8060S / 8065S), one GPU or two (Strix Halo: one), text only - see
-[docs/AMD_MAYA.md](docs/AMD_MAYA.md).
+**AMD (experimental):** Linux and Windows on RX 6800 / 6900, RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo (Radeon 8060S / 8065S), one GPU or two (Strix Halo: one), text only - see
+[docs/AMD_MAYA.md](docs/AMD_MAYA.md) (RDNA2: [docs/AMD_RDNA2.md](docs/AMD_RDNA2.md)).
 
 ## The models: Maya-S, Maya-S24, Maya-M and Maya-L
 
@@ -92,10 +92,10 @@ then `--report`, in a
 
 | | |
 | --- | --- |
-| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x CMP 170HX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090). **AMD (experimental):** RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070 (one GPU or two) and Strix Halo / Gorgon Halo, Radeon 8060S / 8065S (one GPU), text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
+| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x CMP 170HX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090). **AMD (experimental):** RX 6800 / 6900, RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070 (one GPU or two) and Strix Halo / Gorgon Halo, Radeon 8060S / 8065S (one GPU), text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
 | **RAM** | It runs with **32 GB** (the 2x V100 machine in the speed table above has 30 GB). More RAM keeps more experts close and is faster; what does not fit is read from the SSD while it answers. |
 | **Disk** | **~100 GB free on a fast NVMe SSD** (Maya-S is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers; Maya-M needs ~120 GB, Maya-L ~160 GB). Not a hard disk. |
-| **System** | Linux (x86-64; a CPU with AVX2 is best - without it the engine still runs, its CPU expert lane on ggml's slower kernels), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. AMD: ROCm 7 instead of the NVIDIA driver and CUDA (on Windows AMD's ROCm SDK wheels, which the setup offers to install). |
+| **System** | Linux (x86-64; a CPU with AVX2 is best - without it the engine still runs, its CPU expert lane on ggml's slower kernels), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. AMD: ROCm 7 instead of the NVIDIA driver and CUDA (on Windows AMD's ROCm SDK wheels, which the setup offers to install into `.venv` next to an AMD HIP SDK 6.x, leaving that one as it is). |
 
 The installer checks all of this and prints the exact command for anything missing. It installs nothing
 system-wide by itself.
@@ -105,7 +105,7 @@ system-wide by itself.
 **You need:** an NVIDIA GPU (V100 / RTX 20 or newer) on Linux (Windows: [experimental](#windows)), ~100 GB free on
 an NVMe SSD, a current NVIDIA driver
 and the CUDA toolkit (12.x for a V100; the engine is compiled for your GPU). Everything else - Python, the engine, the
-model - is set up for you, the way Strata does it. On an AMD RX 7900 XT / XTX, R9700 / RX 9070 or Strix Halo / Gorgon Halo
+model - is set up for you, the way Strata does it. On an AMD RX 6800 / 6900, RX 7900 XT / XTX, R9700 / RX 9070 or Strix Halo / Gorgon Halo
 (experimental, Linux with ROCm 7, or Windows): `./maya.sh --backend hip --gpu 0 --check` first (Windows:
 `START-MAYA.bat --backend hip --gpu 0 --check`; two cards: `--gpus 0,1`; Strix Halo stays one GPU), then
 [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
@@ -254,7 +254,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_PREFILL_SUB` | NVIDIA: up to 4096; AMD: 256 | prompts: the sub-batch the attention layers, the dense FFN and the shared expert run in (16-8192). Unset on NVIDIA, the attention layers' and the dense FFN's is 256 doubled while it fits in memory the chunk's MoE buffers already take (fewer, larger GEMMs, each weight dequantized once a sub-batch) and the shared expert's stays 256; `256` = the old sub-batches |
 | `STRATA_GLM_KV_INT8` | off | `1` (or `--kv int8` in the config's `"args"`): the attention's latent cache in INT8 - 512 codes and one FP16 scale per 32 values, 544 bytes a token and layer instead of 1024. One V100, 128K context: state 1.78 -> 1.13 GB, 84 more expert slots; no measurable quality change (KL against FP16 within FP16's own run-to-run spread) |
 | `STRATA_GLM_DSA_SCORE` | on | prompts: the sparse attention's indexer scores as a register-tiled FP32 GEMM (a 3090, 4096 tokens at position 10K: 78.8 -> 5.6 ms); `0` = the warp-per-pool kernel |
-| `STRATA_GLM_PREFILL_ATTN` | tensor cores | prompts' sparse attention kernel: on Ampere and newer an mma.sync kernel with 32 heads a block (a 3090, 26.6K-token prompt: 832 -> 966 tok/s); `wmma` = the 91 KB shared-memory kernel Volta runs, `tcreg` = the register kernel Turing runs, `f32` = the FP32 kernel. AMD: `wmma2`, the default on gfx12 (R9700 / RX 9070: prompts +8-10%), or `f16q`, the default on gfx11 and Strix Halo. `STRATA_GLM_PREFILL_ATTN_CHECK=1` compares the chosen kernel with the FP32 one (debug) |
+| `STRATA_GLM_PREFILL_ATTN` | tensor cores | prompts' sparse attention kernel: on Ampere and newer an mma.sync kernel with 32 heads a block (a 3090, 26.6K-token prompt: 832 -> 966 tok/s); `wmma` = the 91 KB shared-memory kernel Volta runs, `tcreg` = the register kernel Turing runs, `f32` = the FP32 kernel. AMD: `wmma2`, the default on gfx12 (R9700 / RX 9070: prompts +8-10%), or `f16q`, the default on gfx11 and Strix Halo; gfx1030 (RDNA2) has no rocWMMA in ROCm 7, so it runs the FP32 kernel whatever is asked for. `STRATA_GLM_PREFILL_ATTN_CHECK=1` compares the chosen kernel with the FP32 one (debug) |
 | `STRATA_GLM_DROP_CACHE` | on with 2+ NUMA nodes | before the RAM tier is pinned, the model files' clean page cache is dropped (the engine reads experts with O_DIRECT): a cached GGUF filling one node made the interleaved tier land 78% on the other, and the CPU lane read one socket's memory; `0` = keep it |
 | `STRATA_GLM_PROFILE_WEIGHT` | 1 | the weight of the pack's routing profile (`expert_counts.txt`) against your usage file in the start-up order of the expert tiers; `0` = your usage only |
 | `STRATA_GLM_LOOP_THINK`, `STRATA_GLM_LOOP_ANSWER` | 256, 1024 | the loop guard: when the last this-many generated tokens are one pattern of at most 32 tokens repeated exactly (a quantized model can fall into `0 0 0 ...` until `max_tokens`), thinking is closed at once, and in the answer the model's current tool-call argument (or else the turn) is closed so an agent goes on; a second loop in the same answer ends it. `0` = off |
@@ -363,9 +363,10 @@ and measured on Linux; on Windows 11 a user runs Maya-L on an RTX 4090, built wi
   `START-MAYA.bat` in Windows itself.
 - A Tesla V100 runs it too, built with CUDA 12.4 ([#57](https://github.com/mw00/project-maya/issues/57)). Run
   `--calibrate` once: it tunes Maya for your PC, and a setup for another context keeps its settings.
-- AMD on Windows (more experimental still), Strix Halo / Gorgon Halo included: `START-MAYA.bat --backend hip --gpu 0
-  --setup` builds the HIP engine with AMD's HIP SDK, or offers AMD's ROCm SDK wheels in `.venv` when there is none
-  ([docs/AMD_MAYA.md](docs/AMD_MAYA.md#windows)).
+- AMD on Windows (more experimental still), Strix Halo / Gorgon Halo and RDNA2 (RX 6800 / 6900) included:
+  `START-MAYA.bat --backend hip --gpu 0
+  --setup` builds the HIP engine with AMD's HIP SDK, or offers AMD's ROCm SDK wheels in `.venv` when there is none or
+  only a 6.x SDK here ([docs/AMD_MAYA.md](docs/AMD_MAYA.md#windows), [RDNA2](docs/AMD_RDNA2.md)).
   `tools\hip\build_maya_windows.bat` builds it by hand (an RX 7900 XTX,
   [#54](https://github.com/mw00/project-maya/pull/54)).
 

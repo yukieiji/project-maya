@@ -15,7 +15,9 @@
 #undef __shfl_up_sync
 #pragma push_macro("__shfl_sync")
 #undef __shfl_sync
+#ifndef STRATA_HIP_NO_ROCWMMA
 #include <rocwmma/rocwmma.hpp>
+#endif
 #pragma pop_macro("__shfl_xor_sync")
 #pragma pop_macro("__shfl_down_sync")
 #pragma pop_macro("__shfl_up_sync")
@@ -1245,6 +1247,7 @@ __global__ void __launch_bounds__(256) mla_attn_mma_kernel(const float* __restri
 constexpr int HW_HG = 16, HW_CH = 16;
 constexpr size_t kHwSmem = (size_t) HW_HG * 512 * 4 + (size_t) HW_CH * 512 * 2 + (size_t) 8 * HW_HG * HW_CH * 4 +
                            (size_t) HW_HG * HW_CH * 2;
+#ifndef STRATA_HIP_NO_ROCWMMA   // (RDNA2: rocWMMA has no gfx10xx, see cmake/hip_backend.cmake)
 __global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __restrict__ q16,
                                                             const uint16_t* __restrict__ lat,
                                                             const int* __restrict__ cells_all,
@@ -1353,6 +1356,7 @@ __global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __re
         o[i] = L > 0.0f ? sO[i] / L : 0.0f;
     }
 }
+#endif
 
 using mla2_h16 = _Float16 __attribute__((ext_vector_type(16)));
 using mla2_f8 = float __attribute__((ext_vector_type(8)));
@@ -1486,7 +1490,9 @@ __global__ void __launch_bounds__(256) mla_attn_wmma2_kernel(
 }
 
 // Per device, the wave32 WMMA path: 0 not probed yet, 1 gfx12 (supported, the default), 2 gfx11 (supported),
-// 3 anything else (unsupported).
+// 3 anything else (unsupported).  RDNA2 (gfx1030) lands here: it has neither this kernel - its FP16 high/low split
+// helper compiles to a trap below gfx11 - nor mla_attn_f16q, whose rocWMMA has no gfx10xx, so its prompt attention
+// runs the F32 kernel (mla_attn).
 int mla_wmma2_arch() {
     static std::atomic<int> cache[64]{};
     int dev = 0;
@@ -2009,6 +2015,11 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
 void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
                    int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {
     if (T <= 0) return;
+#ifdef STRATA_HIP_NO_ROCWMMA
+    std::fprintf(stderr, "glm_batch mla_attn_f16q: rocWMMA has no " STRATA_HIP_ARCHS
+                         " (the F32 prompt attention runs instead)\n");
+    return;
+#else
     if (kv_lora != 512 || n_head % HW_HG != 0) {
         std::fprintf(stderr, "glm_batch mla_attn_f16q: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
         return;
@@ -2018,6 +2029,15 @@ void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, c
     mla_attn_wmma_kernel<<<grid, 256, kHwSmem, s>>>((const _Float16*) q16, lat, cells, n_sel, n_sel_max, n_head, scale, ctx,
                                                     lat_q8);
     check("mla_attn_wmma");
+#endif
+}
+
+bool mla_f16q_supported() {
+#ifdef STRATA_HIP_NO_ROCWMMA
+    return false;                       // (RDNA2: rocWMMA's own list stops at gfx9xx / gfx11xx / gfx12xx)
+#else
+    return true;
+#endif
 }
 
 bool mla_wmma2_supported() { return mla_wmma2_arch() <= 2; }

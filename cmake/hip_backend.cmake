@@ -9,11 +9,13 @@ endif()
 # maintainers; gfx1101 (RX 7800 XT, #254) and gfx1200 (RX 9060 XT, #256) by their owners. gfx1102 (RX 7600) has the
 # same LDS limit and dot4 instruction and passed ctest (#192), but no model run has been reported yet. RDNA2 gfx1030 (RX 6800 / 6900) has the
 # same LDS limit and wave32 but an older dot4 instruction (v_dot4_i32_i8, hip_compat/intrinsics.hpp); a community
-# report ran it (#311), the maintainers have not. gfx1151 (Ryzen AI Max / Strix Halo, Radeon 8060S, RDNA3.5) is the
-# same wave32 / 64 KiB LDS / sudot4 family as gfx1100, on a unified-memory APU; experimental.
+# report ran it (#311), the maintainers have not. Its family gfx1031 / gfx1032 (Navi 22, RX 6700 / 6750 XT) and
+# gfx1034 (Navi 23, RX 6600 / 6650 XT) is the same ISA and builds here, but Maya's installer only offers gfx1030.
+# gfx1151 (Ryzen AI Max / Strix Halo, Radeon
+# 8060S, RDNA3.5) is the same wave32 / 64 KiB LDS / sudot4 family as gfx1100, on a unified-memory APU; experimental.
 set(_strata_hip_validated gfx1100 gfx1201)
 set(_strata_hip_community gfx1101 gfx1200)
-set(_strata_hip_unvalidated gfx1010 gfx1011 gfx1012 gfx1102 gfx1103 gfx1030 gfx1031 gfx1034 gfx1150 gfx1151)   # gfx1103: Radeon 780M iGPU, opt-in, portable kernels (no WMMA)
+set(_strata_hip_unvalidated gfx1010 gfx1011 gfx1012 gfx1102 gfx1103 gfx1030 gfx1031 gfx1032 gfx1034 gfx1150 gfx1151)   # gfx1103: Radeon 780M iGPU, opt-in, portable kernels (no WMMA)
 # CMake hands HIP a ';' list, but a -DCMAKE_HIP_ARCHITECTURES typed by hand (or ROCm's own Windows tooling) may use
 # spaces, which foreach(IN LISTS) would otherwise treat as one element.
 string(REPLACE " " ";" _strata_hip_norm "${CMAKE_HIP_ARCHITECTURES}")
@@ -32,7 +34,8 @@ foreach(_arch IN LISTS _strata_hip_norm)
     message(WARNING "Strata HIP: ${_base} builds, but it is not validated on a real card yet; please report results")
   else()
     message(FATAL_ERROR
-      "Strata HIP supports wave32 gfx1100, gfx1101, gfx1200 and gfx1201 (unvalidated: ${_strata_hip_unvalidated}); "
+      "Strata HIP supports wave32 RDNA2 / RDNA3 / RDNA4 (validated gfx1100 and gfx1201, community gfx1101 and gfx1200, "
+      "unvalidated ${_strata_hip_unvalidated}); "
       "CMAKE_HIP_ARCHITECTURES is '${CMAKE_HIP_ARCHITECTURES}'")
   endif()
   list(APPEND STRATA_HIP_ARCH_LIST "${_base}")
@@ -46,6 +49,17 @@ set(CMAKE_HIP_ARCHITECTURES "${_strata_hip_norm}" CACHE STRING "Strata HIP targe
 # The compiled architectures reach the runtime device check (src/core/device.cu) as "gfx1100,gfx1201": a binary
 # carried to a card it has no code for stops at startup with a clear message instead of "invalid device function".
 string(REPLACE ";" "," STRATA_HIP_ARCHS "${STRATA_HIP_ARCH_LIST}")
+# rocWMMA's own list (ROCm 7: gfx9xx, gfx11xx, gfx12xx) has no RDNA2 in it - its config.hpp stops with "Unsupported
+# architecture" on gfx1030 - so an RDNA2 build leaves the FP16 (f16q) prompt attention out and runs the F32 kernel.
+set(STRATA_HIP_ROCWMMA ON)
+foreach(_arch IN LISTS STRATA_HIP_ARCH_LIST)
+  if(_arch MATCHES "^gfx10")
+    set(STRATA_HIP_ROCWMMA OFF)
+  endif()
+endforeach()
+if(NOT STRATA_HIP_ROCWMMA)
+  message(STATUS "Strata: ${STRATA_HIP_ARCHS} has no rocWMMA: the FP16 (f16q) prompt attention is not built")
+endif()
 
 enable_language(HIP)
 find_package(hip CONFIG REQUIRED)
@@ -73,6 +87,9 @@ add_library(strata_hip_runtime INTERFACE)
 target_include_directories(strata_hip_runtime BEFORE INTERFACE
   "${STRATA_HIP_COMPAT_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_definitions(strata_hip_runtime INTERFACE STRATA_USE_HIP=1 "STRATA_HIP_ARCHS=\"${STRATA_HIP_ARCHS}\"")
+if(NOT STRATA_HIP_ROCWMMA)
+  target_compile_definitions(strata_hip_runtime INTERFACE STRATA_HIP_NO_ROCWMMA=1)
+endif()
 target_link_libraries(strata_hip_runtime INTERFACE hip::host)
 foreach(_language IN ITEMS CXX HIP)
   target_compile_options(strata_hip_runtime INTERFACE

@@ -124,7 +124,8 @@ KdaBufs carve_kda(Carve& c, size_t T, const Glm5Geometry& g) {
 // F32 q_abs (wmma2), and the F32 kernel.  Both FP16 products and the WMMA attention are on by default;
 // STRATA_GLM_MLA_F16=0 and STRATA_GLM_MLA_WMMA=0 turn them off (WMMA off keeps the F32 attention, F16 off also the F32
 // products).  STRATA_GLM_PREFILL_ATTN=wmma2|f16q|f32 forces an attention path; unset, gfx12 (RDNA4) defaults to wmma2
-// and gfx11 to f16q.
+// and gfx11 to f16q.  RDNA2 (gfx1030) has no rocWMMA in ROCm 7, so both FP16 paths are out of its binary and its
+// prompt attention runs the F32 kernel.
 __global__ void pack_heads_f16(const float* __restrict__ src, uint16_t* __restrict__ dst, int T, int H, int K) {
     const int64_t n = (int64_t) T * H * K;
     for (int64_t i = blockIdx.x * (int64_t) blockDim.x + threadIdx.x; i < n; i += (int64_t) gridDim.x * blockDim.x) {
@@ -157,6 +158,9 @@ MlaAttnPath mla_attn_path() {
     static const bool want_wmma2 = mode != nullptr && std::strcmp(mode, "wmma2") == 0;
     static const bool want_f16q = mode != nullptr && std::strcmp(mode, "f16q") == 0;
     static const bool want_f32 = mode != nullptr && std::strcmp(mode, "f32") == 0;
+    // RDNA2 has no rocWMMA (its own list has no gfx10xx), so neither FP16 path is built for it: the F32 kernel runs,
+    // whatever was asked for.
+    if (!gb::mla_f16q_supported()) return MlaAttnPath::F32;
     if (want_f16q) return MlaAttnPath::F16Q;
     if (want_f32) return MlaAttnPath::F32;
     if (want_wmma2) return gb::mla_wmma2_supported() ? MlaAttnPath::WMMA2 : MlaAttnPath::F16Q;
